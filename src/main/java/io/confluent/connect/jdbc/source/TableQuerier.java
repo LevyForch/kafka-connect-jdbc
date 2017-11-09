@@ -40,6 +40,7 @@ abstract class TableQuerier implements Comparable<TableQuerier> {
   protected final String name;
   protected final String query;
   protected final String topicPrefix;
+  protected final int fetchSize;
 
   // Mutable state
 
