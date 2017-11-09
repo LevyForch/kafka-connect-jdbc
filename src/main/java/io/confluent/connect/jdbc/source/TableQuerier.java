@@ -50,13 +50,14 @@ abstract class TableQuerier implements Comparable<TableQuerier> {
   protected Schema schema;
 
   public TableQuerier(QueryMode mode, String nameOrQuery, String topicPrefix,
-                      String schemaPattern, boolean mapNumerics) {
+                      String schemaPattern, boolean mapNumerics, int fetchSize) {
     this.mode = mode;
     this.schemaPattern = schemaPattern;
     this.name = mode.equals(QueryMode.TABLE) ? nameOrQuery : null;
     this.query = mode.equals(QueryMode.QUERY) ? nameOrQuery : null;
     this.topicPrefix = topicPrefix;
     this.mapNumerics = mapNumerics;
+    this.fetchSize = fetchSize;
     this.lastUpdate = 0;
   }
 
@@ -69,10 +70,18 @@ abstract class TableQuerier implements Comparable<TableQuerier> {
       return stmt;
     }
     createPreparedStatement(db);
+    setFetchSizeOnStatement();
     return stmt;
   }
 
   protected abstract void createPreparedStatement(Connection db) throws SQLException;
+
+  private void setFetchSizeOnStatement() throws SQLException {
+    // We set fetchSize here to limit the number of rows the JDBC driver tries to hold in memory.
+    // Alternatively, we could have set a LIMIT in the query, but this causes the offset to be NULL.
+    // We're not sure why this is.
+    stmt.setFetchSize(fetchSize);
+  }
 
   public boolean querying() {
     return resultSet != null;
