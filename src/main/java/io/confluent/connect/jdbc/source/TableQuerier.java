@@ -78,11 +78,11 @@ abstract class TableQuerier implements Comparable<TableQuerier> {
   protected abstract void createPreparedStatement(Connection db) throws SQLException;
 
   private void setFetchSizeOnStatement() throws SQLException {
-    // We set fetchSize here to limit the number of rows the JDBC driver tries to hold in memory.
-    // Alternatively, we could have set a LIMIT in the query, but this causes the offset to be NULL.
-    // We're not sure why this is.
     stmt.setFetchSize(fetchSize);
   }
+  // We set fetchSize here to limit the number of rows the JDBC driver tries to hold in memory.
+  // Alternatively, we could have set a LIMIT in the query, but this causes the offset to be NULL.
+  // We're not sure why this is.
 
   public boolean querying() {
     return resultSet != null;
