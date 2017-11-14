@@ -70,6 +70,7 @@ abstract class TableQuerier implements Comparable<TableQuerier> {
     if (stmt != null) {
       return stmt;
     }
+    if (fetchSize > 0) db.setAutoCommit(false);
     createPreparedStatement(db);
     setFetchSizeOnStatement();
     return stmt;
@@ -78,7 +79,10 @@ abstract class TableQuerier implements Comparable<TableQuerier> {
   protected abstract void createPreparedStatement(Connection db) throws SQLException;
 
   private void setFetchSizeOnStatement() throws SQLException {
-    stmt.setFetchSize(fetchSize);
+    if (fetchSize > 0) {
+      stmt.setFetchDirection(ResultSet.FETCH_FORWARD);
+      stmt.setFetchSize(fetchSize);
+    }
   }
   // We set fetchSize here to limit the number of rows the JDBC driver tries to hold in memory.
   // Alternatively, we could have set a LIMIT in the query, but this causes the offset to be NULL.
