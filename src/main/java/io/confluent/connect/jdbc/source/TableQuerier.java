@@ -40,6 +40,7 @@ abstract class TableQuerier implements Comparable<TableQuerier> {
   protected final String name;
   protected final String query;
   protected final String topicPrefix;
+  protected final int fetchSize;
 
   // Mutable state
 
@@ -50,13 +51,14 @@ abstract class TableQuerier implements Comparable<TableQuerier> {
   protected Schema schema;
 
   public TableQuerier(QueryMode mode, String nameOrQuery, String topicPrefix,
-                      String schemaPattern, boolean mapNumerics) {
+                      String schemaPattern, boolean mapNumerics, int fetchSize) {
     this.mode = mode;
     this.schemaPattern = schemaPattern;
     this.name = mode.equals(QueryMode.TABLE) ? nameOrQuery : null;
     this.query = mode.equals(QueryMode.QUERY) ? nameOrQuery : null;
     this.topicPrefix = topicPrefix;
     this.mapNumerics = mapNumerics;
+    this.fetchSize = fetchSize;
     this.lastUpdate = 0;
   }
 
@@ -68,11 +70,23 @@ abstract class TableQuerier implements Comparable<TableQuerier> {
     if (stmt != null) {
       return stmt;
     }
+    if (fetchSize > 0) db.setAutoCommit(false);
     createPreparedStatement(db);
+    setFetchSizeOnStatement();
     return stmt;
   }
 
   protected abstract void createPreparedStatement(Connection db) throws SQLException;
+
+  private void setFetchSizeOnStatement() throws SQLException {
+    if (fetchSize > 0) {
+      stmt.setFetchDirection(ResultSet.FETCH_FORWARD);
+      stmt.setFetchSize(fetchSize);
+    }
+  }
+  // We set fetchSize here to limit the number of rows the JDBC driver tries to hold in memory.
+  // Alternatively, we could have set a LIMIT in the query, but this causes the offset to be NULL.
+  // We're not sure why this is.
 
   public boolean querying() {
     return resultSet != null;
