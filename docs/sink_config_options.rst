@@ -3,8 +3,6 @@
 JDBC Sink Configuration Options
 -------------------------------
 
-.. include:: includes/db_connection_security.rst
-
 Connection
 ^^^^^^^^^^
 
@@ -28,14 +26,6 @@ Connection
   * Default: null
   * Importance: high
 
-``dialect.name``
-  The name of the database dialect that should be used for this connector. By default this is empty, and the connector automatically determines the dialect based upon the JDBC connection URL. Use this if you want to override that behavior and use a specific dialect. All properly-packaged dialects in the JDBC connector plugin can be used.
-
-  * Type: string
-  * Default: ""
-  * Valid Values: [, Db2DatabaseDialect, MySqlDatabaseDialect, SybaseDatabaseDialect, GenericDatabaseDialect, OracleDatabaseDialect, SqlServerDatabaseDialect, PostgreSqlDatabaseDialect, SqliteDatabaseDialect, DerbyDatabaseDialect, SapHanaDatabaseDialect, MockDatabaseDialect, VerticaDatabaseDialect]
-  * Importance: low
-
 Writes
 ^^^^^^
 
@@ -50,13 +40,9 @@ Writes
 
       Use the appropriate upsert semantics for the target database if it is supported by the connector, e.g. ``INSERT OR IGNORE``.
 
-  ``update``
-
-      Use the appropriate update semantics for the target database if it is supported by the connector, e.g. ``UPDATE``.
-
   * Type: string
   * Default: insert
-  * Valid Values: [insert, upsert, update]
+  * Valid Values: [insert, upsert]
   * Importance: high
 
 ``batch.size``
@@ -78,6 +64,8 @@ Data Mapping
   * Type: string
   * Default: ${topic}
   * Importance: medium
+
+.. _sink-pk-config-options:
 
 ``pk.mode``
   The primary key mode, also refer to ``pk.fields`` documentation for interplay. Supported modes are:

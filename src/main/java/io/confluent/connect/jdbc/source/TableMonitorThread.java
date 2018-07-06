@@ -16,9 +16,6 @@
 
 package io.confluent.connect.jdbc.source;
 
-import io.confluent.connect.jdbc.dialect.DatabaseDialect;
-import io.confluent.connect.jdbc.util.ConnectionProvider;
-import io.confluent.connect.jdbc.util.TableId;
 import org.apache.kafka.connect.connector.ConnectorContext;
 import org.apache.kafka.connect.errors.ConnectException;
 import org.slf4j.Logger;
@@ -28,11 +25,12 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Collectors;
+
+import io.confluent.connect.jdbc.util.CachedConnectionProvider;
+import io.confluent.connect.jdbc.util.JdbcUtils;
 
 /**
  * Thread that monitors the database for changes to the set of tables in the database that this
@@ -41,32 +39,27 @@ import java.util.stream.Collectors;
 public class TableMonitorThread extends Thread {
   private static final Logger log = LoggerFactory.getLogger(TableMonitorThread.class);
 
-  private final DatabaseDialect dialect;
-  private final ConnectionProvider connectionProvider;
+  private final CachedConnectionProvider cachedConnectionProvider;
+  private final String schemaPattern;
   private final ConnectorContext context;
   private final CountDownLatch shutdownLatch;
   private final long pollMs;
   private Set<String> whitelist;
   private Set<String> blacklist;
-  private List<TableId> tables;
-  private Map<String, List<TableId>> duplicates;
+  private List<String> tables;
+  private Set<String> tableTypes;
 
-  public TableMonitorThread(DatabaseDialect dialect,
-      ConnectionProvider connectionProvider,
-      ConnectorContext context,
-      long pollMs,
-      Set<String> whitelist,
-      Set<String> blacklist
-  ) {
-    this.dialect = dialect;
-    this.connectionProvider = connectionProvider;
+  public TableMonitorThread(CachedConnectionProvider cachedConnectionProvider, ConnectorContext context, String schemaPattern, long pollMs,
+                            Set<String> whitelist, Set<String> blacklist, Set<String> tableTypes) {
+    this.cachedConnectionProvider = cachedConnectionProvider;
+    this.schemaPattern = schemaPattern;
     this.context = context;
     this.shutdownLatch = new CountDownLatch(1);
     this.pollMs = pollMs;
     this.whitelist = whitelist;
     this.blacklist = blacklist;
     this.tables = null;
-
+    this.tableTypes = tableTypes;
   }
 
   @Override
@@ -92,7 +85,7 @@ public class TableMonitorThread extends Thread {
     }
   }
 
-  public synchronized List<TableId> tables() {
+  public synchronized List<String> tables() {
     //TODO: Timeout should probably be user-configurable or class-level constant
     final long timeout = 10000L;
     long started = System.currentTimeMillis();
@@ -108,24 +101,6 @@ public class TableMonitorThread extends Thread {
     if (tables == null) {
       throw new ConnectException("Tables could not be updated quickly enough.");
     }
-    if (!duplicates.isEmpty()) {
-      String configText;
-      if (whitelist != null) {
-        configText = "'" + JdbcSourceConnectorConfig.TABLE_WHITELIST_CONFIG + "'";
-      } else if (blacklist != null) {
-        configText = "'" + JdbcSourceConnectorConfig.TABLE_BLACKLIST_CONFIG + "'";
-      } else {
-        configText = "'" + JdbcSourceConnectorConfig.TABLE_WHITELIST_CONFIG + "' or '"
-            + JdbcSourceConnectorConfig.TABLE_BLACKLIST_CONFIG + "'";
-      }
-      String msg = "The connector uses the unqualified table name as the topic name and has "
-          + "detected duplicate unqualified table names. This could lead to mixed data types in "
-          + "the topic and downstream processing errors. To prevent such processing errors, the "
-          + "JDBC Source connector fails to start when it detects duplicate table name "
-          + "configurations. Update the connector's " + configText + " config to include exactly "
-          + "one table in each of the tables listed below.\n\t";
-      throw new ConnectException(msg + duplicates.values());
-    }
     return tables;
   }
 
@@ -134,58 +109,38 @@ public class TableMonitorThread extends Thread {
   }
 
   private synchronized boolean updateTables() {
-    final List<TableId> tables;
+    final List<String> tables;
     try {
-      tables = dialect.tableIds(connectionProvider.getConnection());
+      tables = JdbcUtils.getTables(cachedConnectionProvider.getValidConnection(), schemaPattern, tableTypes);
       log.debug("Got the following tables: " + Arrays.toString(tables.toArray()));
     } catch (SQLException e) {
-      log.error(
-          "Error while trying to get updated table list, ignoring and waiting for next table poll"
-          + " interval",
-          e
-      );
-      connectionProvider.close();
+      log.error("Error while trying to get updated table list, ignoring and waiting for next table poll interval", e);
+      cachedConnectionProvider.closeQuietly();
       return false;
     }
 
-    final List<TableId> filteredTables = new ArrayList<>(tables.size());
+    final List<String> filteredTables;
     if (whitelist != null) {
-      for (TableId table : tables) {
-        String fqn1 = dialect.expressionBuilder().append(table, false).toString();
-        String fqn2 = dialect.expressionBuilder().append(table, true).toString();
-        if (whitelist.contains(fqn1) || whitelist.contains(fqn2)
-            || whitelist.contains(table.tableName())) {
+      filteredTables = new ArrayList<>(tables.size());
+      for (String table : tables) {
+        if (whitelist.contains(table)) {
           filteredTables.add(table);
         }
       }
     } else if (blacklist != null) {
-      for (TableId table : tables) {
-        String fqn1 = dialect.expressionBuilder().append(table, false).toString();
-        String fqn2 = dialect.expressionBuilder().append(table, true).toString();
-        if (!(blacklist.contains(fqn1) || blacklist.contains(fqn2)
-              || blacklist.contains(table.tableName()))) {
+      filteredTables = new ArrayList<>(tables.size());
+      for (String table : tables) {
+        if (!blacklist.contains(table)) {
           filteredTables.add(table);
         }
       }
     } else {
-      filteredTables.addAll(tables);
+      filteredTables = tables;
     }
 
     if (!filteredTables.equals(this.tables)) {
-      log.info(
-          "After filtering the tables are: {}",
-          dialect.expressionBuilder()
-                 .appendList()
-                 .delimitedBy(",")
-                 .of(filteredTables)
-      );
-      Map<String, List<TableId>> duplicates = filteredTables.stream()
-          .collect(Collectors.groupingBy(TableId::tableName))
-          .entrySet().stream()
-          .filter(entry -> entry.getValue().size() > 1)
-          .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
-      this.duplicates = duplicates;
-      List<TableId> previousTables = this.tables;
+      log.debug("After filtering we got tables: " + Arrays.toString(filteredTables.toArray()));
+      List<String> previousTables = this.tables;
       this.tables = filteredTables;
       notifyAll();
       // Only return true if the table list wasn't previously null, i.e. if this was not the

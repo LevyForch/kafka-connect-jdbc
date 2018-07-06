@@ -29,7 +29,7 @@ import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Statement;
 
-import io.confluent.connect.jdbc.util.BytesUtil;
+import javax.xml.bind.DatatypeConverter;
 
 /**
  * Embedded Derby server useful for testing against a real JDBC database.
@@ -251,9 +251,9 @@ public class EmbeddedDerby {
     } else if (value instanceof Blob) {
       Blob blob = ((Blob) value);
       byte[] blobData = blob.getBytes(1, (int) blob.length());
-      return "CAST(X'" + BytesUtil.toHex(blobData) + "' AS BLOB)";
+      return "CAST(X'" + DatatypeConverter.printHexBinary(blobData) + "' AS BLOB)";
     } else if (value instanceof byte[]) {
-      return "X'" + BytesUtil.toHex((byte[]) value) + "'";
+      return "X'" + DatatypeConverter.printHexBinary((byte[]) value) + "'";
     } else {
       return value.toString();
     }

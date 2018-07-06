@@ -1,8 +1,6 @@
 JDBC Source Configuration Options
 ---------------------------------
 
-.. include:: includes/db_connection_security.rst
-
 Database
 ^^^^^^^^
 
@@ -27,29 +25,6 @@ Database
   * Default: null
   * Importance: high
 
-``connection.attempts``
-  Maximum number of attempts to retrieve a valid JDBC connection.
-
-  * Type: int
-  * Default: 3
-  * Importance: low
-
-``connection.backoff.ms``
-  Backoff time in milliseconds between connection attempts.
-
-  * Type: long
-  * Default: 10000
-  * Importance: low
-
-``catalog.pattern``
-  Catalog pattern to fetch table metadata from the database:
-
-    * "" retrieves those without a catalog,  * null (default) means that the catalog name should not be used to narrow the search so that all table metadata would be fetched, regardless their catalog.
-
-  * Type: string
-  * Default: null
-  * Importance: medium
-
 ``table.whitelist``
   List of tables to include in copying. If specified, table.blacklist may not be set.
 
@@ -65,36 +40,80 @@ Database
   * Importance: medium
 
 ``schema.pattern``
-  Schema pattern to fetch table metadata from the database:
+  Schema pattern to fetch tables metadata from the database:
 
-    * "" retrieves those without a schema,  * null (default) means that the schema name should not be used to narrow the search, so that all table metadata would be fetched, regardless their schema.
+    * "" retrieves those without a schema,  * null (default) means that the schema name should not be used to narrow the search, all tables metadata would be fetched, regardless their schema.
 
   * Type: string
   * Default: null
   * Importance: medium
 
+Connector
+^^^^^^^^^
+
+``poll.interval.ms``
+  Frequency in ms to poll for new data in each table.
+
+  * Type: int
+  * Default: 5000
+  * Importance: high
+
+``batch.max.rows``
+  Maximum number of rows to include in a single batch when polling for new data. This setting can be used to limit the amount of data buffered internally in the connector.
+
+  * Type: int
+  * Default: 100
+  * Importance: low
+
+``table.poll.interval.ms``
+  Frequency in ms to poll for new or removed tables, which may result in updated task configurations to start polling for data in added tables or stop polling for data in removed tables.
+
+  * Type: long
+  * Default: 60000
+  * Importance: low
+
+``table.types``
+  By default, the JDBC connector will only detect tables with type TABLE from the source Database. This config allows a command separated list of table types to extract. Options include:
+
+  * TABLE
+
+  * VIEW
+
+  * SYSTEM TABLE
+
+  * GLOBAL TEMPORARY
+
+  * LOCAL TEMPORARY
+
+  * ALIAS
+
+  * SYNONYM
+
+  In most cases it only makes sense to have either TABLE or VIEW.
+
+  * Type: list
+  * Default: TABLE
+  * Importance: low
+
+``topic.prefix``
+  Prefix to prepend to table names to generate the name of the Kafka topic to publish data to, or in the case of a custom query, the full name of the topic to publish to.
+
+  * Type: string
+  * Importance: high
+
+``timestamp.delay.interval.ms``
+  How long to wait after a row with certain timestamp appears before we include it in the result. You may choose to add some delay to allow transactions with earlier timestamp to complete. The first execution will fetch all available records (i.e. starting at timestamp 0) until current time minus the delay. Every following execution will get data from the last time we fetched until current time minus the delay.
+
+  * Type: long
+  * Default: 0
+  * Importance: high
+
 ``numeric.precision.mapping``
-  Whether or not to attempt mapping NUMERIC values by precision to integral types. This option is now deprecated. A future version may remove it completely. Please use ``numeric.mapping`` instead.
+  Whether or not to attempt mapping NUMERIC values by precision to integral types
 
   * Type: boolean
   * Default: false
-  * Importance: low
-
-``numeric.mapping``
-  Map NUMERIC values by precision and optionally scale to integral or decimal types. Use ``none`` if all NUMERIC columns are to be represented by Connect's DECIMAL logical type. Use ``best_fit`` if NUMERIC columns should be cast to Connect's INT8, INT16, INT32, INT64, or FLOAT64 based upon the column's precision and scale. Or use ``precision_only`` to map NUMERIC columns based only on the column's precision assuming that column's scale is 0. The ``none`` option is the default, but may lead to serialization issues with Avro since Connect's DECIMAL type is mapped to its binary representation, and ``best_fit`` will often be preferred since it maps to the most appropriate primitive type.
-
-  * Type: string
-  * Default: null
-  * Valid Values: [none, precision_only, best_fit]
-  * Importance: low
-
-``dialect.name``
-  The name of the database dialect that should be used for this connector. By default this is empty, and the connector automatically determines the dialect based upon the JDBC connection URL. Use this if you want to override that behavior and use a specific dialect. All properly-packaged dialects in the JDBC connector plugin can be used.
-
-  * Type: string
-  * Default: ""
-  * Valid Values: [, Db2DatabaseDialect, MySqlDatabaseDialect, SybaseDatabaseDialect, GenericDatabaseDialect, OracleDatabaseDialect, SqlServerDatabaseDialect, PostgreSqlDatabaseDialect, SqliteDatabaseDialect, DerbyDatabaseDialect, SapHanaDatabaseDialect, MockDatabaseDialect, VerticaDatabaseDialect]
-  * Importance: low
+  * Importance: medium
 
 Mode
 ^^^^
@@ -124,9 +143,9 @@ Mode
   * Importance: medium
 
 ``timestamp.column.name``
-  Comma separated list of one or more timestamp columns to detect new or modified rows using the COALESCE SQL function. Rows whose first non-null timestamp value is greater than the largest previous timestamp value seen will be discovered with each poll. At least one column should not be nullable.
+  The name of the timestamp column to use to detect new or modified rows. This column may not be nullable.
 
-  * Type: list
+  * Type: string
   * Default: ""
   * Importance: medium
 
@@ -143,63 +162,3 @@ Mode
   * Type: string
   * Default: ""
   * Importance: medium
-
-Connector
-^^^^^^^^^
-
-``table.types``
-  By default, the JDBC connector will only detect tables with type TABLE from the source Database. This config allows a command separated list of table types to extract. Options include:
-
-  * TABLE
-
-  * VIEW
-
-  * SYSTEM TABLE
-
-  * GLOBAL TEMPORARY
-
-  * LOCAL TEMPORARY
-
-  * ALIAS
-
-  * SYNONYM
-
-  In most cases it only makes sense to have either TABLE or VIEW.
-
-  * Type: list
-  * Default: TABLE
-  * Importance: low
-
-``poll.interval.ms``
-  Frequency in ms to poll for new data in each table.
-
-  * Type: int
-  * Default: 5000
-  * Importance: high
-
-``batch.max.rows``
-  Maximum number of rows to include in a single batch when polling for new data. This setting can be used to limit the amount of data buffered internally in the connector.
-
-  * Type: int
-  * Default: 100
-  * Importance: low
-
-``table.poll.interval.ms``
-  Frequency in ms to poll for new or removed tables, which may result in updated task configurations to start polling for data in added tables or stop polling for data in removed tables.
-
-  * Type: long
-  * Default: 60000
-  * Importance: low
-
-``topic.prefix``
-  Prefix to prepend to table names to generate the name of the Kafka topic to publish data to, or in the case of a custom query, the full name of the topic to publish to.
-
-  * Type: string
-  * Importance: high
-
-``timestamp.delay.interval.ms``
-  How long to wait after a row with certain timestamp appears before we include it in the result. You may choose to add some delay to allow transactions with earlier timestamp to complete. The first execution will fetch all available records (i.e. starting at timestamp 0) until current time minus the delay. Every following execution will get data from the last time we fetched until current time minus the delay.
-
-  * Type: long
-  * Default: 0
-  * Importance: high

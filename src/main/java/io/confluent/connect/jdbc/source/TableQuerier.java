@@ -16,15 +16,13 @@
 
 package io.confluent.connect.jdbc.source;
 
+import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.source.SourceRecord;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-
-import io.confluent.connect.jdbc.dialect.DatabaseDialect;
-import io.confluent.connect.jdbc.util.TableId;
 
 /**
  * TableQuerier executes queries against a specific table. Implementations handle different types
@@ -37,30 +35,28 @@ abstract class TableQuerier implements Comparable<TableQuerier> {
     QUERY // User-specified query
   }
 
-  protected final DatabaseDialect dialect;
   protected final QueryMode mode;
+  protected final String schemaPattern;
+  protected final String name;
   protected final String query;
   protected final String topicPrefix;
-  protected final TableId tableId;
 
   // Mutable state
 
+  protected final boolean mapNumerics;
   protected long lastUpdate;
   protected PreparedStatement stmt;
   protected ResultSet resultSet;
-  protected SchemaMapping schemaMapping;
+  protected Schema schema;
 
-  public TableQuerier(
-      DatabaseDialect dialect,
-      QueryMode mode,
-      String nameOrQuery,
-      String topicPrefix
-  ) {
-    this.dialect = dialect;
+  public TableQuerier(QueryMode mode, String nameOrQuery, String topicPrefix,
+                      String schemaPattern, boolean mapNumerics) {
     this.mode = mode;
-    this.tableId = mode.equals(QueryMode.TABLE) ? dialect.parseTableIdentifier(nameOrQuery) : null;
+    this.schemaPattern = schemaPattern;
+    this.name = mode.equals(QueryMode.TABLE) ? nameOrQuery : null;
     this.query = mode.equals(QueryMode.QUERY) ? nameOrQuery : null;
     this.topicPrefix = topicPrefix;
+    this.mapNumerics = mapNumerics;
     this.lastUpdate = 0;
   }
 
@@ -86,8 +82,7 @@ abstract class TableQuerier implements Comparable<TableQuerier> {
     if (resultSet == null) {
       stmt = getOrCreatePreparedStatement(db);
       resultSet = executeQuery();
-      String schemaName = tableId != null ? tableId.tableName() : null; // backwards compatible
-      schemaMapping = SchemaMapping.create(schemaName, resultSet.getMetaData(), dialect);
+      schema = DataConverter.convertSchema(name, resultSet.getMetaData(), mapNumerics);
     }
   }
 
@@ -104,7 +99,7 @@ abstract class TableQuerier implements Comparable<TableQuerier> {
     closeStatementQuietly();
     // TODO: Can we cache this and quickly check that it's identical for the next query
     // instead of constructing from scratch since it's almost always the same
-    schemaMapping = null;
+    schema = null;
     lastUpdate = now;
   }
 
@@ -113,7 +108,6 @@ abstract class TableQuerier implements Comparable<TableQuerier> {
       try {
         stmt.close();
       } catch (SQLException ignored) {
-        // intentionally ignored
       }
     }
     stmt = null;
@@ -124,7 +118,6 @@ abstract class TableQuerier implements Comparable<TableQuerier> {
       try {
         resultSet.close();
       } catch (SQLException ignored) {
-        // intentionally ignored
       }
     }
     resultSet = null;
@@ -137,7 +130,7 @@ abstract class TableQuerier implements Comparable<TableQuerier> {
     } else if (this.lastUpdate > other.lastUpdate) {
       return 1;
     } else {
-      return this.tableId.compareTo(other.tableId);
+      return this.name.compareTo(other.name);
     }
   }
 }

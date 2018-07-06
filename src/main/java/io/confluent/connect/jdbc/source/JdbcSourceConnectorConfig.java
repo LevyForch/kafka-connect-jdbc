@@ -16,6 +16,7 @@
 
 package io.confluent.connect.jdbc.source;
 
+import io.confluent.connect.jdbc.util.JdbcUtils;
 import org.apache.kafka.common.config.AbstractConfig;
 import org.apache.kafka.common.config.ConfigDef;
 import org.apache.kafka.common.config.ConfigDef.Importance;
@@ -23,32 +24,17 @@ import org.apache.kafka.common.config.ConfigDef.Recommender;
 import org.apache.kafka.common.config.ConfigDef.Type;
 import org.apache.kafka.common.config.ConfigDef.Width;
 import org.apache.kafka.common.config.ConfigException;
-import org.apache.kafka.common.utils.Time;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.kafka.common.config.types.Password;
 
 import java.sql.Connection;
+import java.sql.DriverManager;
 import java.sql.SQLException;
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
-
-import io.confluent.connect.jdbc.dialect.DatabaseDialect;
-import io.confluent.connect.jdbc.dialect.DatabaseDialects;
-import io.confluent.connect.jdbc.util.DatabaseDialectRecommender;
-import io.confluent.connect.jdbc.util.TableId;
 
 public class JdbcSourceConnectorConfig extends AbstractConfig {
-
-  private static final Logger LOG = LoggerFactory.getLogger(JdbcSourceConnectorConfig.class);
 
   public static final String CONNECTION_URL_CONFIG = "connection.url";
   private static final String CONNECTION_URL_DOC = "JDBC connection URL.";
@@ -63,16 +49,13 @@ public class JdbcSourceConnectorConfig extends AbstractConfig {
   private static final String CONNECTION_PASSWORD_DISPLAY = "JDBC Password";
 
   public static final String CONNECTION_ATTEMPTS_CONFIG = "connection.attempts";
-  private static final String CONNECTION_ATTEMPTS_DOC
-      = "Maximum number of attempts to retrieve a valid JDBC connection.";
+  private static final String CONNECTION_ATTEMPTS_DOC = "Maximum number of attempts to retrieve a valid JDBC connection.";
   private static final String CONNECTION_ATTEMPTS_DISPLAY = "JDBC connection attempts";
   public static final int CONNECTION_ATTEMPTS_DEFAULT = 3;
 
   public static final String CONNECTION_BACKOFF_CONFIG = "connection.backoff.ms";
-  private static final String CONNECTION_BACKOFF_DOC
-      = "Backoff time in milliseconds between connection attempts.";
-  private static final String CONNECTION_BACKOFF_DISPLAY
-      = "JDBC connection backoff in milliseconds";
+  private static final String CONNECTION_BACKOFF_DOC = "Backoff time in milliseconds between connection attemps.";
+  private static final String CONNECTION_BACKOFF_DISPLAY = "JDBC connection backoff in milliseconds";
   public static final long CONNECTION_BACKOFF_DEFAULT = 10000L;
 
   public static final String POLL_INTERVAL_MS_CONFIG = "poll.interval.ms";
@@ -90,42 +73,9 @@ public class JdbcSourceConnectorConfig extends AbstractConfig {
 
   public static final String NUMERIC_PRECISION_MAPPING_CONFIG = "numeric.precision.mapping";
   private static final String NUMERIC_PRECISION_MAPPING_DOC =
-      "Whether or not to attempt mapping NUMERIC values by precision to integral types. This "
-      + "option is now deprecated. A future version may remove it completely. Please use "
-      + "``numeric.mapping`` instead.";
-
+          "Whether or not to attempt mapping NUMERIC values by precision to integral types";
   public static final boolean NUMERIC_PRECISION_MAPPING_DEFAULT = false;
-  public static final String NUMERIC_MAPPING_CONFIG = "numeric.mapping";
-  private static final String NUMERIC_PRECISION_MAPPING_DISPLAY = "Map Numeric Values By "
-      + "Precision (deprecated)";
-
-  private static final String NUMERIC_MAPPING_DOC =
-      "Map NUMERIC values by precision and optionally scale to integral or decimal types. Use "
-      + "``none`` if all NUMERIC columns are to be represented by Connect's DECIMAL logical "
-      + "type. Use ``best_fit`` if NUMERIC columns should be cast to Connect's INT8, INT16, "
-      + "INT32, INT64, or FLOAT64 based upon the column's precision and scale. Or use "
-      + "``precision_only`` to map NUMERIC columns based only on the column's precision "
-      + "assuming that column's scale is 0. The ``none`` option is the default, but may lead "
-      + "to serialization issues with Avro since Connect's DECIMAL type is mapped to its "
-      + "binary representation, and ``best_fit`` will often be preferred since it maps to the"
-      + " most appropriate primitive type.";
-
-  public static final String NUMERIC_MAPPING_DEFAULT = null;
-  private static final String NUMERIC_MAPPING_DISPLAY = "Map Numeric Values, Integral "
-      + "or Decimal, By Precision and Scale";
-
-  private static final EnumRecommender NUMERIC_MAPPING_RECOMMENDER =
-      EnumRecommender.in(NumericMapping.values());
-
-  public static final String DIALECT_NAME_CONFIG = "dialect.name";
-  private static final String DIALECT_NAME_DISPLAY = "Database Dialect";
-  public static final String DIALECT_NAME_DEFAULT = "";
-  private static final String DIALECT_NAME_DOC =
-      "The name of the database dialect that should be used for this connector. By default this "
-      + "is empty, and the connector automatically determines the dialect based upon the "
-      + "JDBC connection URL. Use this if you want to override that behavior and use a "
-      + "specific dialect. All properly-packaged dialects in the JDBC connector plugin "
-      + "can be used.";
+  private static final String NUMERIC_PRECISION_MAPPING_DISPLAY = "Map Numeric Values By Precision";
 
   public static final String MODE_CONFIG = "mode";
   private static final String MODE_DOC =
@@ -158,10 +108,8 @@ public class JdbcSourceConnectorConfig extends AbstractConfig {
 
   public static final String TIMESTAMP_COLUMN_NAME_CONFIG = "timestamp.column.name";
   private static final String TIMESTAMP_COLUMN_NAME_DOC =
-      "Comma separated list of one or more timestamp columns to detect new or modified rows using "
-      + "the COALESCE SQL function. Rows whose first non-null timestamp value is greater than the "
-      + "largest previous timestamp value seen will be discovered with each poll. At least one "
-      + "column should not be nullable.";
+      "The name of the timestamp column to use to detect new or modified rows. This column may "
+      + "not be nullable.";
   public static final String TIMESTAMP_COLUMN_NAME_DEFAULT = "";
   private static final String TIMESTAMP_COLUMN_NAME_DISPLAY = "Timestamp Column Name";
 
@@ -171,8 +119,7 @@ public class JdbcSourceConnectorConfig extends AbstractConfig {
       + "configurations to start polling for data in added tables or stop polling for data in "
       + "removed tables.";
   public static final long TABLE_POLL_INTERVAL_MS_DEFAULT = 60 * 1000;
-  private static final String TABLE_POLL_INTERVAL_MS_DISPLAY
-      = "Metadata Change Monitoring Interval (ms)";
+  private static final String TABLE_POLL_INTERVAL_MS_DISPLAY = "Metadata Change Monitoring Interval (ms)";
 
   public static final String TABLE_WHITELIST_CONFIG = "table.whitelist";
   private static final String TABLE_WHITELIST_DOC =
@@ -188,21 +135,11 @@ public class JdbcSourceConnectorConfig extends AbstractConfig {
 
   public static final String SCHEMA_PATTERN_CONFIG = "schema.pattern";
   private static final String SCHEMA_PATTERN_DOC =
-      "Schema pattern to fetch table metadata from the database:\n"
+      "Schema pattern to fetch tables metadata from the database:\n"
       + "  * \"\" retrieves those without a schema,"
-      + "  * null (default) means that the schema name should not be used to narrow the search,"
-      + " so that all table metadata would be fetched, regardless of their schema.";
+      + "  * null (default) means that the schema name should not be used to narrow the search, all tables "
+      + "metadata would be fetched, regardless their schema.";
   private static final String SCHEMA_PATTERN_DISPLAY = "Schema pattern";
-  public static final String SCHEMA_PATTERN_DEFAULT = null;
-
-  public static final String CATALOG_PATTERN_CONFIG = "catalog.pattern";
-  private static final String CATALOG_PATTERN_DOC =
-      "Catalog pattern to fetch table metadata from the database:\n"
-      + "  * \"\" retrieves those without a catalog,"
-      + "  * null (default) means that the catalog name should not be used to narrow the search"
-      + " so that all table metadata would be fetched, regardless of their catalog.";
-  private static final String CATALOG_PATTERN_DISPLAY = "Schema pattern";
-  public static final String CATALOG_PATTERN_DEFAULT = null;
 
   public static final String QUERY_CONFIG = "query";
   private static final String QUERY_DOC =
@@ -224,19 +161,18 @@ public class JdbcSourceConnectorConfig extends AbstractConfig {
 
   public static final String VALIDATE_NON_NULL_CONFIG = "validate.non.null";
   private static final String VALIDATE_NON_NULL_DOC =
-      "By default, the JDBC connector will validate that all incrementing and timestamp tables "
-      + "have NOT NULL set for the columns being used as their ID/timestamp. If the tables don't,"
-      + " JDBC connector will fail to start. Setting this to false will disable these checks.";
+      "By default, the JDBC connector will validate that all incrementing and timestamp tables have NOT NULL set for "
+      + "the columns being used as their ID/timestamp. If the tables don't, JDBC connector will fail to start. Setting "
+      + "this to false will disable these checks.";
   public static final boolean VALIDATE_NON_NULL_DEFAULT = true;
   private static final String VALIDATE_NON_NULL_DISPLAY = "Validate Non Null";
 
   public static final String TIMESTAMP_DELAY_INTERVAL_MS_CONFIG = "timestamp.delay.interval.ms";
   private static final String TIMESTAMP_DELAY_INTERVAL_MS_DOC =
-      "How long to wait after a row with certain timestamp appears before we include it in the "
-      + "result. You may choose to add some delay to allow transactions with earlier timestamp to"
-      + " complete. The first execution will fetch all available records (i.e. starting at "
-      + "timestamp 0) until current time minus the delay. Every following execution will get data"
-      + " from the last time we fetched until current time minus the delay.";
+      "How long to wait after a row with certain timestamp appears before we include it in the result. "
+      + "You may choose to add some delay to allow transactions with earlier timestamp to complete. "
+      + "The first execution will fetch all available records (i.e. starting at timestamp 0) until current time minus the delay. "
+      + "Every following execution will get data from the last time we fetched until current time minus the delay.";
   public static final long TIMESTAMP_DELAY_INTERVAL_MS_DEFAULT = 0;
   private static final String TIMESTAMP_DELAY_INTERVAL_MS_DISPLAY = "Delay Interval (ms)";
 
@@ -244,22 +180,16 @@ public class JdbcSourceConnectorConfig extends AbstractConfig {
   public static final String MODE_GROUP = "Mode";
   public static final String CONNECTOR_GROUP = "Connector";
 
-  // We want the table recommender to only cache values for a short period of time so that the
-  // blacklist and whitelist config properties can use a single query.
-  private static final Recommender TABLE_RECOMMENDER = new CachingRecommender(
-      new TableRecommender(),
-      Time.SYSTEM,
-      TimeUnit.SECONDS.toMillis(5)
-  );
+
+  private static final Recommender TABLE_RECOMMENDER = new TableRecommender();
   private static final Recommender MODE_DEPENDENTS_RECOMMENDER =  new ModeDependentsRecommender();
 
 
   public static final String TABLE_TYPE_DEFAULT = "TABLE";
   public static final String TABLE_TYPE_CONFIG = "table.types";
   private static final String TABLE_TYPE_DOC =
-      "By default, the JDBC connector will only detect tables with type TABLE from the source "
-      + "Database. This config allows a command separated list of table types to extract. Options"
-      + " include:\n"
+      "By default, the JDBC connector will only detect tables with type TABLE from the source Database. "
+      + "This config allows a command separated list of table types to extract. Options include:\n"
       + "* TABLE\n"
       + "* VIEW\n"
       + "* SYSTEM TABLE\n"
@@ -271,304 +201,60 @@ public class JdbcSourceConnectorConfig extends AbstractConfig {
   private static final String TABLE_TYPE_DISPLAY = "Table Types";
 
   public static ConfigDef baseConfigDef() {
-    ConfigDef config = new ConfigDef();
-    addDatabaseOptions(config);
-    addModeOptions(config);
-    addConnectorOptions(config);
-    return config;
-  }
-
-  private static final void addDatabaseOptions(ConfigDef config) {
-    int orderInGroup = 0;
-    config.define(
-        CONNECTION_URL_CONFIG,
-        Type.STRING,
-        Importance.HIGH,
-        CONNECTION_URL_DOC,
-        DATABASE_GROUP,
-        ++orderInGroup,
-        Width.LONG,
-        CONNECTION_URL_DISPLAY,
-        Arrays.asList(TABLE_WHITELIST_CONFIG, TABLE_BLACKLIST_CONFIG)
-    ).define(
-        CONNECTION_USER_CONFIG,
-        Type.STRING,
-        null,
-        Importance.HIGH,
-        CONNECTION_USER_DOC,
-        DATABASE_GROUP,
-        ++orderInGroup,
-        Width.LONG,
-        CONNECTION_USER_DISPLAY
-    ).define(
-        CONNECTION_PASSWORD_CONFIG,
-        Type.PASSWORD,
-        null,
-        Importance.HIGH,
-        CONNECTION_PASSWORD_DOC,
-        DATABASE_GROUP,
-        ++orderInGroup,
-        Width.SHORT,
-        CONNECTION_PASSWORD_DISPLAY
-    ).define(
-        CONNECTION_ATTEMPTS_CONFIG,
-        Type.INT,
-        CONNECTION_ATTEMPTS_DEFAULT,
-        Importance.LOW,
-        CONNECTION_ATTEMPTS_DOC,
-        DATABASE_GROUP,
-        ++orderInGroup,
-        Width.SHORT,
-        CONNECTION_ATTEMPTS_DISPLAY
-    ).define(
-        CONNECTION_BACKOFF_CONFIG,
-        Type.LONG,
-        CONNECTION_BACKOFF_DEFAULT,
-        Importance.LOW,
-        CONNECTION_BACKOFF_DOC,
-        DATABASE_GROUP,
-        ++orderInGroup,
-        Width.SHORT,
-        CONNECTION_BACKOFF_DISPLAY
-    ).define(
-        TABLE_WHITELIST_CONFIG,
-        Type.LIST,
-        TABLE_WHITELIST_DEFAULT,
-        Importance.MEDIUM,
-        TABLE_WHITELIST_DOC,
-        DATABASE_GROUP,
-        ++orderInGroup,
-        Width.LONG,
-        TABLE_WHITELIST_DISPLAY,
-        TABLE_RECOMMENDER
-    ).define(
-        TABLE_BLACKLIST_CONFIG,
-        Type.LIST,
-        TABLE_BLACKLIST_DEFAULT,
-        Importance.MEDIUM,
-        TABLE_BLACKLIST_DOC,
-        DATABASE_GROUP,
-        ++orderInGroup,
-        Width.LONG,
-        TABLE_BLACKLIST_DISPLAY,
-        TABLE_RECOMMENDER
-    ).define(
-        CATALOG_PATTERN_CONFIG,
-        Type.STRING,
-        CATALOG_PATTERN_DEFAULT,
-        Importance.MEDIUM,
-        CATALOG_PATTERN_DOC,
-        DATABASE_GROUP,
-        ++orderInGroup,
-        Width.SHORT,
-        CATALOG_PATTERN_DISPLAY
-    ).define(
-        SCHEMA_PATTERN_CONFIG,
-        Type.STRING,
-        SCHEMA_PATTERN_DEFAULT,
-        Importance.MEDIUM,
-        SCHEMA_PATTERN_DOC,
-        DATABASE_GROUP,
-        ++orderInGroup,
-        Width.SHORT,
-        SCHEMA_PATTERN_DISPLAY
-    ).define(
-        NUMERIC_PRECISION_MAPPING_CONFIG,
-        Type.BOOLEAN,
-        NUMERIC_PRECISION_MAPPING_DEFAULT,
-        Importance.LOW,
-        NUMERIC_PRECISION_MAPPING_DOC,
-        DATABASE_GROUP,
-        ++orderInGroup,
-        Width.SHORT,
-        NUMERIC_PRECISION_MAPPING_DISPLAY
-    ).define(
-        NUMERIC_MAPPING_CONFIG,
-        Type.STRING,
-        NUMERIC_MAPPING_DEFAULT,
-        NUMERIC_MAPPING_RECOMMENDER,
-        Importance.LOW,
-        NUMERIC_MAPPING_DOC,
-        DATABASE_GROUP,
-        ++orderInGroup,
-        Width.SHORT,
-        NUMERIC_MAPPING_DISPLAY,
-        NUMERIC_MAPPING_RECOMMENDER
-    ).define(
-        DIALECT_NAME_CONFIG,
-        Type.STRING,
-        DIALECT_NAME_DEFAULT,
-        DatabaseDialectRecommender.INSTANCE,
-        Importance.LOW,
-        DIALECT_NAME_DOC,
-        DATABASE_GROUP,
-        ++orderInGroup,
-        Width.LONG,
-        DIALECT_NAME_DISPLAY,
-        DatabaseDialectRecommender.INSTANCE);
-  }
-
-  private static final void addModeOptions(ConfigDef config) {
-    int orderInGroup = 0;
-    config.define(
-        MODE_CONFIG,
-        Type.STRING,
-        MODE_UNSPECIFIED,
-        ConfigDef.ValidString.in(
-            MODE_UNSPECIFIED,
-            MODE_BULK,
-            MODE_TIMESTAMP,
-            MODE_INCREMENTING,
-            MODE_TIMESTAMP_INCREMENTING
-        ),
-        Importance.HIGH,
-        MODE_DOC,
-        MODE_GROUP,
-        ++orderInGroup,
-        Width.MEDIUM,
-        MODE_DISPLAY,
-        Arrays.asList(
-            INCREMENTING_COLUMN_NAME_CONFIG,
-            TIMESTAMP_COLUMN_NAME_CONFIG,
-            VALIDATE_NON_NULL_CONFIG
-        )
-    ).define(
-        INCREMENTING_COLUMN_NAME_CONFIG,
-        Type.STRING,
-        INCREMENTING_COLUMN_NAME_DEFAULT,
-        Importance.MEDIUM,
-        INCREMENTING_COLUMN_NAME_DOC,
-        MODE_GROUP,
-        ++orderInGroup,
-        Width.MEDIUM,
-        INCREMENTING_COLUMN_NAME_DISPLAY,
-        MODE_DEPENDENTS_RECOMMENDER
-    ).define(
-        TIMESTAMP_COLUMN_NAME_CONFIG,
-        Type.LIST,
-        TIMESTAMP_COLUMN_NAME_DEFAULT,
-        Importance.MEDIUM,
-        TIMESTAMP_COLUMN_NAME_DOC,
-        MODE_GROUP,
-        ++orderInGroup,
-        Width.MEDIUM,
-        TIMESTAMP_COLUMN_NAME_DISPLAY,
-        MODE_DEPENDENTS_RECOMMENDER
-    ).define(
-        VALIDATE_NON_NULL_CONFIG,
-        Type.BOOLEAN,
-        VALIDATE_NON_NULL_DEFAULT,
-        Importance.LOW,
-        VALIDATE_NON_NULL_DOC,
-        MODE_GROUP,
-        ++orderInGroup,
-        Width.SHORT,
-        VALIDATE_NON_NULL_DISPLAY,
-        MODE_DEPENDENTS_RECOMMENDER
-    ).define(
-        QUERY_CONFIG,
-        Type.STRING,
-        QUERY_DEFAULT,
-        Importance.MEDIUM,
-        QUERY_DOC,
-        MODE_GROUP,
-        ++orderInGroup,
-        Width.SHORT,
-        QUERY_DISPLAY);
-  }
-
-  private static final void addConnectorOptions(ConfigDef config) {
-    int orderInGroup = 0;
-    config.define(
-        TABLE_TYPE_CONFIG,
-        Type.LIST,
-        TABLE_TYPE_DEFAULT,
-        Importance.LOW,
-        TABLE_TYPE_DOC,
-        CONNECTOR_GROUP,
-        ++orderInGroup,
-        Width.MEDIUM,
-        TABLE_TYPE_DISPLAY
-    ).define(
-        POLL_INTERVAL_MS_CONFIG,
-        Type.INT,
-        POLL_INTERVAL_MS_DEFAULT,
-        Importance.HIGH,
-        POLL_INTERVAL_MS_DOC,
-        CONNECTOR_GROUP,
-        ++orderInGroup,
-        Width.SHORT,
-        POLL_INTERVAL_MS_DISPLAY
-    ).define(
-        BATCH_MAX_ROWS_CONFIG,
-        Type.INT,
-        BATCH_MAX_ROWS_DEFAULT,
-        Importance.LOW,
-        BATCH_MAX_ROWS_DOC,
-        CONNECTOR_GROUP,
-        ++orderInGroup,
-        Width.SHORT,
-        BATCH_MAX_ROWS_DISPLAY
-    ).define(
-        TABLE_POLL_INTERVAL_MS_CONFIG,
-        Type.LONG,
-        TABLE_POLL_INTERVAL_MS_DEFAULT,
-        Importance.LOW,
-        TABLE_POLL_INTERVAL_MS_DOC,
-        CONNECTOR_GROUP,
-        ++orderInGroup,
-        Width.SHORT,
-        TABLE_POLL_INTERVAL_MS_DISPLAY
-    ).define(
-        TOPIC_PREFIX_CONFIG,
-        Type.STRING,
-        Importance.HIGH,
-        TOPIC_PREFIX_DOC,
-        CONNECTOR_GROUP,
-        ++orderInGroup,
-        Width.MEDIUM,
-        TOPIC_PREFIX_DISPLAY
-    ).define(
-        TIMESTAMP_DELAY_INTERVAL_MS_CONFIG,
-        Type.LONG,
-        TIMESTAMP_DELAY_INTERVAL_MS_DEFAULT,
-        Importance.HIGH,
-        TIMESTAMP_DELAY_INTERVAL_MS_DOC,
-        CONNECTOR_GROUP,
-        ++orderInGroup,
-        Width.MEDIUM,
-        TIMESTAMP_DELAY_INTERVAL_MS_DISPLAY);
+    return new ConfigDef()
+        .define(CONNECTION_URL_CONFIG, Type.STRING, Importance.HIGH, CONNECTION_URL_DOC, DATABASE_GROUP, 1, Width.LONG, CONNECTION_URL_DISPLAY, Arrays.asList(TABLE_WHITELIST_CONFIG, TABLE_BLACKLIST_CONFIG))
+        .define(CONNECTION_USER_CONFIG, Type.STRING, null, Importance.HIGH, CONNECTION_USER_DOC, DATABASE_GROUP, 2, Width.LONG, CONNECTION_USER_DISPLAY)
+        .define(CONNECTION_PASSWORD_CONFIG, Type.PASSWORD, null, Importance.HIGH, CONNECTION_PASSWORD_DOC, DATABASE_GROUP, 3, Width.SHORT, CONNECTION_PASSWORD_DISPLAY)
+        .define(CONNECTION_ATTEMPTS_CONFIG, Type.INT, CONNECTION_ATTEMPTS_DEFAULT, Importance.LOW, CONNECTION_ATTEMPTS_DOC, DATABASE_GROUP, 4, Width.SHORT, CONNECTION_ATTEMPTS_DISPLAY)
+        .define(CONNECTION_BACKOFF_CONFIG, Type.LONG, CONNECTION_BACKOFF_DEFAULT, Importance.LOW, CONNECTION_BACKOFF_DOC, DATABASE_GROUP, 5, Width.SHORT, CONNECTION_BACKOFF_DISPLAY)
+        .define(TABLE_WHITELIST_CONFIG, Type.LIST, TABLE_WHITELIST_DEFAULT, Importance.MEDIUM, TABLE_WHITELIST_DOC, DATABASE_GROUP, 4, Width.LONG, TABLE_WHITELIST_DISPLAY,
+                TABLE_RECOMMENDER)
+        .define(TABLE_BLACKLIST_CONFIG, Type.LIST, TABLE_BLACKLIST_DEFAULT, Importance.MEDIUM, TABLE_BLACKLIST_DOC, DATABASE_GROUP, 5, Width.LONG, TABLE_BLACKLIST_DISPLAY,
+                TABLE_RECOMMENDER)
+        .define(SCHEMA_PATTERN_CONFIG, Type.STRING, null, Importance.MEDIUM, SCHEMA_PATTERN_DOC, DATABASE_GROUP, 6, Width.SHORT, SCHEMA_PATTERN_DISPLAY)
+        .define(TABLE_TYPE_CONFIG, Type.LIST, TABLE_TYPE_DEFAULT, Importance.LOW,
+                TABLE_TYPE_DOC, CONNECTOR_GROUP, 4, Width.MEDIUM, TABLE_TYPE_DISPLAY)
+        .define(NUMERIC_PRECISION_MAPPING_CONFIG, Type.BOOLEAN, NUMERIC_PRECISION_MAPPING_DEFAULT, Importance.LOW, NUMERIC_PRECISION_MAPPING_DOC, DATABASE_GROUP, 4, Width.SHORT, NUMERIC_PRECISION_MAPPING_DISPLAY)
+        .define(MODE_CONFIG, Type.STRING, MODE_UNSPECIFIED, ConfigDef.ValidString.in(MODE_UNSPECIFIED, MODE_BULK, MODE_TIMESTAMP, MODE_INCREMENTING, MODE_TIMESTAMP_INCREMENTING),
+                Importance.HIGH, MODE_DOC, MODE_GROUP, 1, Width.MEDIUM, MODE_DISPLAY, Arrays.asList(INCREMENTING_COLUMN_NAME_CONFIG, TIMESTAMP_COLUMN_NAME_CONFIG, VALIDATE_NON_NULL_CONFIG))
+        .define(INCREMENTING_COLUMN_NAME_CONFIG, Type.STRING, INCREMENTING_COLUMN_NAME_DEFAULT, Importance.MEDIUM, INCREMENTING_COLUMN_NAME_DOC, MODE_GROUP, 2, Width.MEDIUM, INCREMENTING_COLUMN_NAME_DISPLAY,
+                MODE_DEPENDENTS_RECOMMENDER)
+        .define(TIMESTAMP_COLUMN_NAME_CONFIG, Type.STRING, TIMESTAMP_COLUMN_NAME_DEFAULT, Importance.MEDIUM, TIMESTAMP_COLUMN_NAME_DOC, MODE_GROUP, 3, Width.MEDIUM, TIMESTAMP_COLUMN_NAME_DISPLAY,
+                MODE_DEPENDENTS_RECOMMENDER)
+        .define(VALIDATE_NON_NULL_CONFIG, Type.BOOLEAN, VALIDATE_NON_NULL_DEFAULT, Importance.LOW, VALIDATE_NON_NULL_DOC, MODE_GROUP, 4, Width.SHORT, VALIDATE_NON_NULL_DISPLAY,
+                MODE_DEPENDENTS_RECOMMENDER)
+        .define(QUERY_CONFIG, Type.STRING, QUERY_DEFAULT, Importance.MEDIUM, QUERY_DOC, MODE_GROUP, 5, Width.SHORT, QUERY_DISPLAY)
+        .define(POLL_INTERVAL_MS_CONFIG, Type.INT, POLL_INTERVAL_MS_DEFAULT, Importance.HIGH, POLL_INTERVAL_MS_DOC, CONNECTOR_GROUP, 1, Width.SHORT, POLL_INTERVAL_MS_DISPLAY)
+        .define(BATCH_MAX_ROWS_CONFIG, Type.INT, BATCH_MAX_ROWS_DEFAULT, Importance.LOW, BATCH_MAX_ROWS_DOC, CONNECTOR_GROUP, 2, Width.SHORT, BATCH_MAX_ROWS_DISPLAY)
+        .define(TABLE_POLL_INTERVAL_MS_CONFIG, Type.LONG, TABLE_POLL_INTERVAL_MS_DEFAULT, Importance.LOW, TABLE_POLL_INTERVAL_MS_DOC, CONNECTOR_GROUP, 3, Width.SHORT, TABLE_POLL_INTERVAL_MS_DISPLAY)
+        .define(TOPIC_PREFIX_CONFIG, Type.STRING, Importance.HIGH, TOPIC_PREFIX_DOC, CONNECTOR_GROUP, 4, Width.MEDIUM, TOPIC_PREFIX_DISPLAY)
+        .define(TIMESTAMP_DELAY_INTERVAL_MS_CONFIG, Type.LONG, TIMESTAMP_DELAY_INTERVAL_MS_DEFAULT, Importance.HIGH, TIMESTAMP_DELAY_INTERVAL_MS_DOC, CONNECTOR_GROUP, 5, Width.MEDIUM, TIMESTAMP_DELAY_INTERVAL_MS_DISPLAY);
   }
 
   public static final ConfigDef CONFIG_DEF = baseConfigDef();
 
-  public JdbcSourceConnectorConfig(Map<String, ?> props) {
+  public JdbcSourceConnectorConfig(Map<String, String> props) {
     super(CONFIG_DEF, props);
     String mode = getString(JdbcSourceConnectorConfig.MODE_CONFIG);
-    if (mode.equals(JdbcSourceConnectorConfig.MODE_UNSPECIFIED)) {
+    if (mode.equals(JdbcSourceConnectorConfig.MODE_UNSPECIFIED))
       throw new ConfigException("Query mode must be specified");
-    }
   }
 
   private static class TableRecommender implements Recommender {
 
-    @SuppressWarnings("unchecked")
     @Override
     public List<Object> validValues(String name, Map<String, Object> config) {
       String dbUrl = (String) config.get(CONNECTION_URL_CONFIG);
+      String dbUser = (String) config.get(CONNECTION_USER_CONFIG);
+      Password dbPassword = (Password) config.get(CONNECTION_PASSWORD_CONFIG);
+      String schemaPattern = (String) config.get(JdbcSourceTaskConfig.SCHEMA_PATTERN_CONFIG);
       if (dbUrl == null) {
         throw new ConfigException(CONNECTION_URL_CONFIG + " cannot be null.");
       }
-      // Create the dialect to get the tables ...
-      AbstractConfig jdbcConfig = new AbstractConfig(CONFIG_DEF, config);
-      DatabaseDialect dialect = DatabaseDialects.findBestFor(dbUrl, jdbcConfig);
-      try (Connection db = dialect.getConnection()) {
-        List<Object> result = new LinkedList<>();
-        for (TableId id : dialect.tableIds(db)) {
-          // Just add the unqualified table name
-          result.add(id.tableName());
-        }
-        return result;
+      Connection db;
+      try {
+        db = DriverManager.getConnection(dbUrl, dbUser, dbPassword == null ? null : dbPassword.value());
+        return new LinkedList<Object>(JdbcUtils.getTables(db, schemaPattern));
       } catch (SQLException e) {
         throw new ConfigException("Couldn't open connection to " + dbUrl, e);
       }
@@ -577,71 +263,6 @@ public class JdbcSourceConnectorConfig extends AbstractConfig {
     @Override
     public boolean visible(String name, Map<String, Object> config) {
       return true;
-    }
-  }
-
-  /**
-   * A recommender that caches values returned by a delegate, where the cache remains valid for a
-   * specified duration and as long as the configuration remains unchanged.
-   */
-  static class CachingRecommender implements Recommender {
-
-    private final Time time;
-    private final long cacheDurationInMillis;
-    private final AtomicReference<CachedRecommenderValues> cachedValues
-        = new AtomicReference<>(new CachedRecommenderValues());
-    private final Recommender delegate;
-
-    public CachingRecommender(Recommender delegate, Time time, long cacheDurationInMillis) {
-      this.delegate = delegate;
-      this.time = time;
-      this.cacheDurationInMillis = cacheDurationInMillis;
-    }
-
-    @Override
-    public List<Object> validValues(String name, Map<String, Object> config) {
-      List<Object> results = cachedValues.get().cachedValue(config, time.milliseconds());
-      if (results != null) {
-        LOG.debug("Returning cached table names: {}", results);
-        return results;
-      }
-      LOG.trace("Fetching table names");
-      results = delegate.validValues(name, config);
-      LOG.debug("Caching table names: {}", results);
-      long expireTime = time.milliseconds() + cacheDurationInMillis;
-      cachedValues.set(new CachedRecommenderValues(config, results, expireTime));
-      return results;
-    }
-
-    @Override
-    public boolean visible(String name, Map<String, Object> config) {
-      return true;
-    }
-  }
-
-  static class CachedRecommenderValues {
-    private final Map<String, Object> lastConfig;
-    private final List<Object> results;
-    private final long expiryTimeInMillis;
-
-    public CachedRecommenderValues() {
-      this(null, null, 0L);
-    }
-
-    public CachedRecommenderValues(
-        Map<String, Object> lastConfig,
-        List<Object> results, long expiryTimeInMillis) {
-      this.lastConfig = lastConfig;
-      this.results = results;
-      this.expiryTimeInMillis = expiryTimeInMillis;
-    }
-
-    public List<Object> cachedValue(Map<String, Object> config, long currentTimeInMillis) {
-      if (currentTimeInMillis < expiryTimeInMillis
-          && lastConfig != null && lastConfig.equals(config)) {
-        return results;
-      }
-      return null;
     }
   }
 
@@ -661,12 +282,9 @@ public class JdbcSourceConnectorConfig extends AbstractConfig {
         case MODE_TIMESTAMP:
           return name.equals(TIMESTAMP_COLUMN_NAME_CONFIG) || name.equals(VALIDATE_NON_NULL_CONFIG);
         case MODE_INCREMENTING:
-          return name.equals(INCREMENTING_COLUMN_NAME_CONFIG)
-                 || name.equals(VALIDATE_NON_NULL_CONFIG);
+          return name.equals(INCREMENTING_COLUMN_NAME_CONFIG) || name.equals(VALIDATE_NON_NULL_CONFIG);
         case MODE_TIMESTAMP_INCREMENTING:
-          return name.equals(TIMESTAMP_COLUMN_NAME_CONFIG)
-                 || name.equals(INCREMENTING_COLUMN_NAME_CONFIG)
-                 || name.equals(VALIDATE_NON_NULL_CONFIG);
+          return name.equals(TIMESTAMP_COLUMN_NAME_CONFIG) || name.equals(INCREMENTING_COLUMN_NAME_CONFIG) || name.equals(VALIDATE_NON_NULL_CONFIG);
         case MODE_UNSPECIFIED:
           throw new ConfigException("Query mode must be specified");
         default:
@@ -675,89 +293,8 @@ public class JdbcSourceConnectorConfig extends AbstractConfig {
     }
   }
 
-  public enum NumericMapping {
-    NONE,
-    PRECISION_ONLY,
-    BEST_FIT;
-
-    private static final Map<String, NumericMapping> reverse = new HashMap<>(values().length);
-    static {
-      for (NumericMapping val : values()) {
-        reverse.put(val.name().toLowerCase(Locale.ROOT), val);
-      }
-    }
-
-    public static NumericMapping get(String prop) {
-      // not adding a check for null value because the recommender/validator should catch those.
-      return reverse.get(prop.toLowerCase(Locale.ROOT));
-    }
-
-    public static NumericMapping get(JdbcSourceConnectorConfig config) {
-      String newMappingConfig = config.getString(JdbcSourceConnectorConfig.NUMERIC_MAPPING_CONFIG);
-      // We use 'null' as default to be able to check the old config if the new one is unset.
-      if (newMappingConfig != null) {
-        return get(config.getString(JdbcSourceConnectorConfig.NUMERIC_MAPPING_CONFIG));
-      }
-      if (config.getBoolean(JdbcSourceTaskConfig.NUMERIC_PRECISION_MAPPING_CONFIG)) {
-        return NumericMapping.PRECISION_ONLY;
-      }
-      return NumericMapping.NONE;
-    }
-  }
-
-  //Porting from JdbcSinkConfig and extending to implement Recommender interface too.
-  //TODO: Should factor out to common class.
-  private static class EnumRecommender implements ConfigDef.Validator, ConfigDef.Recommender {
-    private final List<String> canonicalValues;
-    private final Set<String> validValues;
-
-    private EnumRecommender(List<String> canonicalValues, Set<String> validValues) {
-      this.canonicalValues = canonicalValues;
-      this.validValues = validValues;
-    }
-
-    @SafeVarargs
-    public static <E> EnumRecommender in(E... enumerators) {
-      final List<String> canonicalValues = new ArrayList<>(enumerators.length);
-      final Set<String> validValues = new HashSet<>(enumerators.length * 2);
-      for (E e : enumerators) {
-        canonicalValues.add(e.toString().toLowerCase());
-        validValues.add(e.toString().toUpperCase(Locale.ROOT));
-        validValues.add(e.toString().toLowerCase(Locale.ROOT));
-      }
-      return new EnumRecommender(canonicalValues, validValues);
-    }
-
-    @Override
-    public void ensureValid(String key, Object value) {
-      // calling toString on itself because IDE complains if the Object is passed.
-      if (value != null && !validValues.contains(value.toString())) {
-        throw new ConfigException(key, value, "Invalid enumerator");
-      }
-    }
-
-    @Override
-    public String toString() {
-      return canonicalValues.toString();
-    }
-
-    @Override
-    public List<Object> validValues(String name, Map<String, Object> connectorConfigs) {
-      return new ArrayList<Object>(canonicalValues);
-    }
-
-    @Override
-    public boolean visible(String name, Map<String, Object> connectorConfigs) {
-      return true;
-    }
-  }
-
   protected JdbcSourceConnectorConfig(ConfigDef subclassConfigDef, Map<String, String> props) {
     super(subclassConfigDef, props);
-  }
-
-  public NumericMapping numericMapping() {
-    return NumericMapping.get(this);
   }
 
   public static void main(String[] args) {

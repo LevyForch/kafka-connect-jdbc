@@ -22,15 +22,13 @@ import org.apache.kafka.connect.source.SourceRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.Collections;
 import java.util.Map;
 
-import io.confluent.connect.jdbc.dialect.DatabaseDialect;
-import io.confluent.connect.jdbc.source.SchemaMapping.FieldSetter;
+import io.confluent.connect.jdbc.util.JdbcUtils;
 
 /**
  * BulkTableQuerier always returns the entire table.
@@ -38,30 +36,24 @@ import io.confluent.connect.jdbc.source.SchemaMapping.FieldSetter;
 public class BulkTableQuerier extends TableQuerier {
   private static final Logger log = LoggerFactory.getLogger(BulkTableQuerier.class);
 
-  public BulkTableQuerier(
-      DatabaseDialect dialect,
-      QueryMode mode,
-      String name,
-      String topicPrefix
-  ) {
-    super(dialect, mode, name, topicPrefix);
+  public BulkTableQuerier(QueryMode mode, String name, String schemaPattern,
+                          String topicPrefix, boolean mapNumerics) {
+    super(mode, name, topicPrefix, schemaPattern, mapNumerics);
   }
 
   @Override
   protected void createPreparedStatement(Connection db) throws SQLException {
     switch (mode) {
       case TABLE:
-        String queryStr = dialect.expressionBuilder().append("SELECT * FROM ")
-                                 .append(tableId).toString();
-        log.debug("{} prepared SQL query: {}", this, queryStr);
-        stmt = dialect.createPreparedStatement(db, queryStr);
+        String quoteString = JdbcUtils.getIdentifierQuoteString(db);
+        String queryString = "SELECT * FROM " + JdbcUtils.quoteString(name, quoteString);
+        log.debug("{} prepared SQL query: {}", this, queryString);
+        stmt = db.prepareStatement(queryString);
         break;
       case QUERY:
         log.debug("{} prepared SQL query: {}", this, query);
-        stmt = dialect.createPreparedStatement(db, query);
+        stmt = db.prepareStatement(query);
         break;
-      default:
-        throw new ConnectException("Unknown mode: " + mode);
     }
   }
 
@@ -72,29 +64,18 @@ public class BulkTableQuerier extends TableQuerier {
 
   @Override
   public SourceRecord extractRecord() throws SQLException {
-    Struct record = new Struct(schemaMapping.schema());
-    for (FieldSetter setter : schemaMapping.fieldSetters()) {
-      try {
-        setter.setField(record, resultSet);
-      } catch (IOException e) {
-        log.warn("Ignoring record because processing failed:", e);
-      } catch (SQLException e) {
-        log.warn("Ignoring record due to SQL error:", e);
-      }
-    }
+    Struct record = DataConverter.convertRecord(schema, resultSet, mapNumerics);
     // TODO: key from primary key? partition?
     final String topic;
     final Map<String, String> partition;
     switch (mode) {
       case TABLE:
-        String name = tableId.tableName(); // backwards compatible
         partition = Collections.singletonMap(JdbcSourceConnectorConstants.TABLE_NAME_KEY, name);
         topic = topicPrefix + name;
         break;
       case QUERY:
         partition = Collections.singletonMap(JdbcSourceConnectorConstants.QUERY_NAME_KEY,
-                                             JdbcSourceConnectorConstants.QUERY_NAME_VALUE
-        );
+                                             JdbcSourceConnectorConstants.QUERY_NAME_VALUE);
         topic = topicPrefix;
         break;
       default:
@@ -105,8 +86,11 @@ public class BulkTableQuerier extends TableQuerier {
 
   @Override
   public String toString() {
-    return "BulkTableQuerier{" + "table='" + tableId + '\'' + ", query='" + query + '\''
-           + ", topicPrefix='" + topicPrefix + '\'' + '}';
+    return "BulkTableQuerier{" +
+           "name='" + name + '\'' +
+           ", query='" + query + '\'' +
+           ", topicPrefix='" + topicPrefix + '\'' +
+           '}';
   }
 
 }

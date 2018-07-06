@@ -21,6 +21,8 @@ import org.junit.Test;
 
 import java.sql.Timestamp;
 
+import io.confluent.connect.jdbc.source.TimestampIncrementingOffset;
+
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 

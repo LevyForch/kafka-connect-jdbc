@@ -29,13 +29,11 @@ import java.sql.SQLException;
 import java.util.Collection;
 import java.util.Map;
 
-import io.confluent.connect.jdbc.dialect.DatabaseDialect;
-import io.confluent.connect.jdbc.dialect.DatabaseDialects;
+import io.confluent.connect.jdbc.sink.dialect.DbDialect;
 
 public class JdbcSinkTask extends SinkTask {
   private static final Logger log = LoggerFactory.getLogger(JdbcSinkTask.class);
 
-  DatabaseDialect dialect;
   JdbcSinkConfig config;
   JdbcDbWriter writer;
   int remainingRetries;
@@ -49,14 +47,10 @@ public class JdbcSinkTask extends SinkTask {
   }
 
   void initWriter() {
-    if (config.dialectName != null && !config.dialectName.trim().isEmpty()) {
-      dialect = DatabaseDialects.create(config.dialectName, config);
-    } else {
-      dialect = DatabaseDialects.findBestFor(config.connectionUrl, config);
-    }
-    final DbStructure dbStructure = new DbStructure(dialect);
-    log.info("Initializing writer using SQL dialect: {}", dialect.getClass().getSimpleName());
-    writer = new JdbcDbWriter(config, dialect, dbStructure);
+    final DbDialect dbDialect = DbDialect.fromConnectionString(config.connectionUrl);
+    final DbStructure dbStructure = new DbStructure(dbDialect);
+    log.info("Initializing writer using SQL dialect: {}", dbDialect.getClass().getSimpleName());
+    writer = new JdbcDbWriter(config, dbDialect, dbStructure);
   }
 
   @Override
@@ -66,32 +60,20 @@ public class JdbcSinkTask extends SinkTask {
     }
     final SinkRecord first = records.iterator().next();
     final int recordsCount = records.size();
-    log.trace(
-        "Received {} records. First record kafka coordinates:({}-{}-{}). Writing them to the "
-        + "database...",
-        recordsCount, first.topic(), first.kafkaPartition(), first.kafkaOffset()
-    );
+    log.trace("Received {} records. First record kafka coordinates:({}-{}-{}). Writing them to the database...",
+              recordsCount, first.topic(), first.kafkaPartition(), first.kafkaOffset());
     try {
       writer.write(records);
     } catch (SQLException sqle) {
-      log.warn(
-          "Write of {} records failed, remainingRetries={}",
-          records.size(),
-          remainingRetries,
-          sqle
-      );
-      String sqleAllMessages = "";
-      for (Throwable e : sqle) {
-        sqleAllMessages += e + System.lineSeparator();
-      }
+      log.warn("Write of {} records failed, remainingRetries={}", records.size(), remainingRetries, sqle);
       if (remainingRetries == 0) {
-        throw new ConnectException(new SQLException(sqleAllMessages));
+        throw new ConnectException(sqle);
       } else {
         writer.closeQuietly();
         initWriter();
         remainingRetries--;
         context.timeout(config.retryBackoffMs);
-        throw new RetriableException(new SQLException(sqleAllMessages));
+        throw new RetriableException(sqle);
       }
     }
     remainingRetries = config.maxRetries;
@@ -104,19 +86,7 @@ public class JdbcSinkTask extends SinkTask {
 
   public void stop() {
     log.info("Stopping task");
-    try {
-      writer.closeQuietly();
-    } finally {
-      try {
-        if (dialect != null) {
-          dialect.close();
-        }
-      } catch (Throwable t) {
-        log.warn("Error while closing the {} dialect: ", dialect, t);
-      } finally {
-        dialect = null;
-      }
-    }
+    writer.closeQuietly();
   }
 
   @Override
