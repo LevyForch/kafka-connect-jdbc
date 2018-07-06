@@ -30,7 +30,8 @@ public class TimestampIncrementingOffset {
 
   /**
    * @param timestampOffset the timestamp offset.
-   *                        If null, {@link #getTimestampOffset()} will return {@code new Timestamp(0)}.
+   *                        If null, {@link #getTimestampOffset()} will return
+   *                        {@code new Timestamp(0)}.
    * @param incrementingOffset the incrementing offset.
    *                           If null, {@link #getIncrementingOffset()} will return -1.
    */
@@ -44,7 +45,7 @@ public class TimestampIncrementingOffset {
   }
 
   public Timestamp getTimestampOffset() {
-    return timestampOffset == null ? new Timestamp(0) : timestampOffset;
+    return timestampOffset != null ? timestampOffset : new Timestamp(0L);
   }
 
   public Map<String, Object> toMap() {
@@ -88,10 +89,14 @@ public class TimestampIncrementingOffset {
 
     TimestampIncrementingOffset that = (TimestampIncrementingOffset) o;
 
-    if (incrementingOffset != null ? !incrementingOffset.equals(that.incrementingOffset) : that.incrementingOffset != null) {
+    if (incrementingOffset != null
+        ? !incrementingOffset.equals(that.incrementingOffset)
+        : that.incrementingOffset != null) {
       return false;
     }
-    return timestampOffset != null ? timestampOffset.equals(that.timestampOffset) : that.timestampOffset == null;
+    return timestampOffset != null
+           ? timestampOffset.equals(that.timestampOffset)
+           : that.timestampOffset == null;
 
   }
 
